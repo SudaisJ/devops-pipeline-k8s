@@ -1,0 +1,93 @@
+# ─── Service: stable internal endpoint for pods ──────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: url-shortener
+  namespace: default
+  labels:
+    app: url-shortener
+spec:
+  selector:
+    app: url-shortener        # routes traffic to pods with this label
+  ports:
+    - protocol: TCP
+      port: 80                # service port (external)
+      targetPort: 3000        # pod port (internal)
+  type: ClusterIP             # internal only — Ingress handles external traffic
+
+---
+# ─── ConfigMap: non-sensitive configuration ───────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-shortener-config
+  namespace: default
+data:
+  DB_HOST: "your-rds-endpoint.ap-south-1.rds.amazonaws.com"
+  DB_PORT: "5432"
+  DB_NAME: "urlshortener"
+  DB_SSL: "true"
+  PORT: "3000"
+  BASE_URL: "https://short.yourdomain.com"
+
+---
+# ─── Secret: sensitive credentials (base64 encoded) ──────────────────────────
+# To create real values: echo -n 'mypassword' | base64
+apiVersion: v1
+kind: Secret
+metadata:
+  name: url-shortener-secret
+  namespace: default
+type: Opaque
+data:
+  db-user: cG9zdGdyZXM=          # base64 of "postgres"
+  db-password: Y2hhbmdlbWU=      # base64 of "changeme" — use a strong password!
+
+---
+# ─── Ingress: routes external traffic to Service via AWS ALB ─────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: url-shortener-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+spec:
+  rules:
+    - host: short.yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: url-shortener
+                port:
+                  number: 80
+
+---
+# ─── HorizontalPodAutoscaler: auto-scale under load ──────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: url-shortener-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: url-shortener
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70   # scale up when CPU > 70%

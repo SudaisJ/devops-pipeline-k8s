@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: url-shortener
+  namespace: default
+  labels:
+    app: url-shortener
+    version: "1.0"
+spec:
+  replicas: 3                        # 3 pods for high availability
+  selector:
+    matchLabels:
+      app: url-shortener
+  strategy:
+    type: RollingUpdate              # zero-downtime deploys
+    rollingUpdate:
+      maxSurge: 1                    # allow 1 extra pod during update
+      maxUnavailable: 0              # never kill pods before new ones are ready
+  template:
+    metadata:
+      labels:
+        app: url-shortener
+    spec:
+      containers:
+        - name: app
+          image: YOUR_ECR_URI/url-shortener:latest   # GitHub Actions replaces this
+          ports:
+            - containerPort: 3000
+
+          # Environment from ConfigMap (non-sensitive)
+          envFrom:
+            - configMapRef:
+                name: url-shortener-config
+
+          # Environment from Secret (sensitive DB credentials)
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: url-shortener-secret
+                  key: db-password
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: url-shortener-secret
+                  key: db-user
+
+          # Liveness probe: restart pod if app is stuck
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          # Readiness probe: only send traffic when app is ready
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # Resource limits — prevents one pod from starving others
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+
+      # Spread pods across different nodes for resilience
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - url-shortener
+                topologyKey: kubernetes.io/hostname

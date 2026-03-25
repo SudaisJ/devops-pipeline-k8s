@@ -43,12 +43,12 @@ app.post('/shorten', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'url is required' });
 
   try {
-    new URL(url); // validate URL format
+    new URL(url);
   } catch {
     return res.status(400).json({ error: 'invalid URL format' });
   }
 
-  const shortCode = crypto.randomBytes(4).toString('hex'); // e.g. "a3f9c2b1"
+  const shortCode = crypto.randomBytes(4).toString('hex');
 
   try {
     const result = await pool.query(
@@ -67,22 +67,7 @@ app.post('/shorten', async (req, res) => {
   }
 });
 
-// Redirect short URL
-app.get('/:code', async (req, res) => {
-  const { code } = req.params;
-  try {
-    const result = await pool.query(
-      'UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1 RETURNING original_url',
-      [code]
-    );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'URL not found' });
-    res.redirect(301, result.rows[0].original_url);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Stats endpoint
+// Stats — MUST be before /:code wildcard
 app.get('/api/stats/:code', async (req, res) => {
   const { code } = req.params;
   try {
@@ -97,12 +82,30 @@ app.get('/api/stats/:code', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-initDB().then(() => {
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-}).catch(err => {
-  console.error('Failed to initialize database:', err);
-  process.exit(1);
+// Redirect — wildcard ALWAYS last
+app.get('/:code', async (req, res) => {
+  const { code } = req.params;
+  try {
+    const result = await pool.query(
+      'UPDATE urls SET clicks = clicks + 1 WHERE short_code = $1 RETURNING original_url',
+      [code]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'URL not found' });
+    res.redirect(301, result.rows[0].original_url);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
+
+// Guard: only start server when run directly, not when imported by tests
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  initDB().then(() => {
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  }).catch(err => {
+    console.error('Failed to initialize database:', err);
+    process.exit(1);
+  });
+}
 
 module.exports = app;
